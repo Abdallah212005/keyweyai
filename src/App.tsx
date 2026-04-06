@@ -37,6 +37,7 @@ import { getPropertyRecommendations, type Recommendation, type AIResponse } from
 import { propertyService, type Property } from './services/propertyService';
 import { userService, type UserProfile, Tier, Role } from './services/userService';
 import { paymentService, PaymentStatus, type PaymentRequest } from './services/paymentService';
+import { chatService, type ChatMessage } from './services/chatService';
 import { auth } from './firebase';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, type User as FirebaseUser } from 'firebase/auth';
 import { clsx, type ClassValue } from 'clsx';
@@ -65,6 +66,8 @@ export default function App() {
   const [pendingPayments, setPendingPayments] = useState<PaymentRequest[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [selectedAdminUser, setSelectedAdminUser] = useState<UserProfile | null>(null);
+  const [adminUserChats, setAdminUserChats] = useState<ChatMessage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // New Property Form State
@@ -103,8 +106,17 @@ export default function App() {
           );
         }
         setProfile(userProfile);
+
+        // Subscribe to user's chat history
+        const chatUnsubscribe = chatService.subscribeToUserChats(currentUser.uid, (messages) => {
+          if (messages.length > 0) {
+            setHistory(messages.map(m => ({ role: m.role, content: m.content })));
+          }
+        });
+        return () => chatUnsubscribe();
       } else {
         setProfile(null);
+        setHistory([]);
       }
       setIsAuthReady(true);
     });
@@ -130,6 +142,13 @@ export default function App() {
       propertyService.seedInitialData(user.uid);
     }
   }, [isAuthReady, user]);
+
+  useEffect(() => {
+    if (selectedAdminUser && profile?.role === Role.ADMIN) {
+      const unsubscribe = chatService.subscribeToUserChats(selectedAdminUser.uid, setAdminUserChats);
+      return () => unsubscribe();
+    }
+  }, [selectedAdminUser, profile]);
 
   const handleSignIn = async () => {
     try {
@@ -160,6 +179,9 @@ export default function App() {
     if (!input.trim() || loading) return;
 
     const userMessage = input.trim();
+    if (user?.uid) {
+      chatService.saveMessage(user.uid, 'user', userMessage);
+    }
     setHistory(prev => [...prev, { role: 'user', content: userMessage }]);
     setInput('');
     setLoading(true);
@@ -182,6 +204,9 @@ export default function App() {
         assistantContent += (assistantContent ? '\n\n' : '') + text;
       }
 
+      if (user?.uid) {
+        chatService.saveMessage(user.uid, 'assistant', assistantContent);
+      }
       setHistory(prev => [...prev, { role: 'assistant', content: assistantContent }]);
     } catch (err: any) {
       console.error("Submission error:", err);
@@ -555,49 +580,103 @@ export default function App() {
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xl font-black text-white uppercase tracking-tight">User Directory</h3>
         </div>
-        {allUsers.map((u, i) => (
-          <div key={i} className="bg-[#141414] border border-[#262626] rounded-3xl p-6 flex items-center justify-between group hover:border-white/10 transition-all">
-            <div className="flex items-center gap-6">
-              <div className="w-12 h-12 bg-[#0D0D0D] border border-[#262626] rounded-2xl flex items-center justify-center text-primary font-black">
-                {u.displayName[0]}
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-3">
-                  <span className="font-bold text-white">{u.displayName}</span>
-                  <span className={cn(
-                    "text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md",
-                    u.tier === Tier.PREMIUM ? "bg-yellow-500/10 text-yellow-500" :
-                    u.tier === Tier.PLUS ? "bg-primary/10 text-primary" : "bg-gray-500/10 text-gray-500"
-                  )}>
-                    {u.tier}
-                  </span>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-4">
+            {allUsers.map((u, i) => (
+              <div key={i} className={cn(
+                "bg-[#141414] border rounded-3xl p-6 flex items-center justify-between group transition-all cursor-pointer",
+                selectedAdminUser?.uid === u.uid ? "border-primary" : "border-[#262626] hover:border-white/10"
+              )} onClick={() => setSelectedAdminUser(u)}>
+                <div className="flex items-center gap-6">
+                  <div className="w-12 h-12 bg-[#0D0D0D] border border-[#262626] rounded-2xl flex items-center justify-center text-primary font-black">
+                    {u.displayName[0]}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-3">
+                      <span className="font-bold text-white">{u.displayName}</span>
+                      <span className={cn(
+                        "text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md",
+                        u.tier === Tier.PREMIUM ? "bg-yellow-500/10 text-yellow-500" :
+                        u.tier === Tier.PLUS ? "bg-primary/10 text-primary" : "bg-gray-500/10 text-gray-500"
+                      )}>
+                        {u.tier}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500">{u.email}</div>
+                  </div>
                 </div>
-                <div className="text-xs text-gray-500">{u.email}</div>
+                
+                <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                  <button 
+                    onClick={() => handleUpgrade(u.uid, Tier.FREE)}
+                    className="px-4 py-2 bg-[#0D0D0D] border border-[#262626] rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-white transition-all"
+                  >
+                    Free
+                  </button>
+                  <button 
+                    onClick={() => handleUpgrade(u.uid, Tier.PLUS)}
+                    className="px-4 py-2 bg-primary/5 border border-primary/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-primary hover:bg-primary/10 transition-all"
+                  >
+                    Plus
+                  </button>
+                  <button 
+                    onClick={() => handleUpgrade(u.uid, Tier.PREMIUM)}
+                    className="px-4 py-2 bg-yellow-500/5 border border-yellow-500/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-yellow-500 hover:bg-yellow-500/10 transition-all"
+                  >
+                    Premium
+                  </button>
+                </div>
               </div>
+            ))}
+          </div>
+
+          <div className="bg-[#141414] border border-[#262626] rounded-[40px] p-8 flex flex-col h-[600px]">
+            <div className="mb-6 flex items-center justify-between">
+              <h3 className="text-lg font-black text-white uppercase tracking-tight">
+                {selectedAdminUser ? `${selectedAdminUser.displayName}'s Chat` : 'Select a user to view chat'}
+              </h3>
+              {selectedAdminUser && (
+                <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
+                  {adminUserChats.length} Messages
+                </div>
+              )}
             </div>
             
-            <div className="flex items-center gap-3">
-              <button 
-                onClick={() => handleUpgrade(u.uid, Tier.FREE)}
-                className="px-4 py-2 bg-[#0D0D0D] border border-[#262626] rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-white transition-all"
-              >
-                Free
-              </button>
-              <button 
-                onClick={() => handleUpgrade(u.uid, Tier.PLUS)}
-                className="px-4 py-2 bg-primary/5 border border-primary/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-primary hover:bg-primary/10 transition-all"
-              >
-                Plus
-              </button>
-              <button 
-                onClick={() => handleUpgrade(u.uid, Tier.PREMIUM)}
-                className="px-4 py-2 bg-yellow-500/5 border border-yellow-500/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-yellow-500 hover:bg-yellow-500/10 transition-all"
-              >
-                Premium
-              </button>
+            <div className="flex-1 overflow-y-auto space-y-4 custom-scrollbar pr-2">
+              {!selectedAdminUser ? (
+                <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
+                  <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center">
+                    <Users className="w-8 h-8 text-gray-600" />
+                  </div>
+                  <p className="text-gray-500 text-sm font-medium">Select a user from the directory to monitor their AI interactions</p>
+                </div>
+              ) : adminUserChats.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
+                  <p className="text-gray-500 text-sm font-medium">No chat history found for this user</p>
+                </div>
+              ) : (
+                adminUserChats.map((msg, i) => (
+                  <div key={i} className={cn(
+                    "flex flex-col",
+                    msg.role === 'user' ? "items-end" : "items-start"
+                  )}>
+                    <div className={cn(
+                      "max-w-[90%] px-4 py-3 rounded-2xl text-xs leading-relaxed",
+                      msg.role === 'user' 
+                        ? "bg-primary/10 text-primary border border-primary/20" 
+                        : "bg-[#0D0D0D] text-gray-300 border border-[#262626]"
+                    )}>
+                      {msg.content}
+                    </div>
+                    <span className="text-[8px] text-gray-600 mt-1 uppercase font-bold tracking-widest">
+                      {msg.createdAt?.toDate().toLocaleTimeString()}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
-        ))}
+        </div>
       </div>
     </div>
   );

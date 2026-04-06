@@ -34,8 +34,9 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && 
-             request.auth.token.email == "aamr222382@gmail.com" && 
-             request.auth.token.email_verified == true;
+             (request.auth.token.email == "aamr222382@gmail.com" && request.auth.token.email_verified == true ||
+              (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
     }
 
     function isOwner(userId) {
@@ -69,6 +70,12 @@ service cloud.firestore {
              data.status == 'pending';
     }
 
+    function isValidChatMessage(data) {
+      return data.uid is string && 
+             data.role in ['user', 'assistant'] &&
+             data.content is string && data.content.size() < 10000;
+    }
+
     // Users Collection
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
@@ -93,6 +100,13 @@ service cloud.firestore {
       allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
       allow update: if isAdmin();
       allow delete: if isAdmin();
+    }
+
+    // Chats Collection
+    match /chats/{chatId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid && isValidChatMessage(request.resource.data);
+      allow update, delete: if isAdmin();
     }
   }
 }

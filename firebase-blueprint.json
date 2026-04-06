@@ -48,6 +48,18 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "When the request was made" }
       },
       "required": ["uid", "amount", "tier", "walletNumber", "status"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A single message in a chat history",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "UID of the user who sent or received the message" },
+        "role": { "type": "string", "enum": ["user", "assistant"], "description": "Who sent the message" },
+        "content": { "type": "string", "description": "The message text" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the message was sent" }
+      },
+      "required": ["uid", "role", "content", "createdAt"]
     }
   },
   "firestore": {
@@ -62,6 +74,10 @@
     "payments": {
       "schema": "Payment",
       "description": "Subscription payment requests"
+    },
+    "chats": {
+      "schema": "ChatMessage",
+      "description": "Global collection of chat messages for all users"
     }
   }
 }
